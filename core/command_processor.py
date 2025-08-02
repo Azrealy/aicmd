@@ -1,14 +1,94 @@
-"""
-Command Processor - Core logic for AI command assistance
+import os
+from utils.system_info import SystemInfo
+from utils.command_parser import CommandParser
+from .ai_client import AIClient
+from typing import Dict, Optional, List
+import subprocess
+import platform
+
+
+def _build_fix_prompt(self, error_message: str, failed_command: str, context: Dict) -> str:
+    """Build prompt for fixing command errors."""
+    # Extract command from error if not already provided
+    if not failed_command:
+        failed_command = self.command_parser.extract_command_from_error(
+            error_message)
+
+    # Categorize the error to provide better context
+    error_category, extracted_info = self.command_parser.categorize_error(
+        error_message)
+
+    # Get available commands for AI reference - NOW USING THE FUNCTION!
+    available_commands = self.command_parser.get_available_commands_context()
+    common_commands_str = ", ".join(available_commands)
+
+    # Build special context for command not found errors
+    typo_detection_context = ""
+    if error_category == "command_not_found" and failed_command:
+        typo_detection_context = f"""
+TYPO DETECTION REQUIRED:
+The command '{failed_command}' was not found. This is likely a typo or misspelling.
+
+Common commands for reference: {common_commands_str}
+
+Please analyze if '{failed_command}' is a typo of a common command. Consider:
+- Similar spelling (e.g., 'dockeraa' → 'docker', 'lls' → 'ls')
+- Missing/extra characters (e.g., 'gti' → 'git')
+- Keyboard proximity errors (e.g., 'pytho' → 'python')
+- Common typing mistakes
+- Double letters (e.g., 'lls' → 'ls', 'gitt' → 'git')
+
+If you detect a likely typo, suggest the correct command with the same arguments.
 """
 
-import os
-import platform
-import subprocess
-from typing import Dict, Optional, List
-from core.ai_client import AIClient
-from utils.command_parser import CommandParser
-from utils.system_info import SystemInfo
+    return f"""You are an expert command-line assistant specialized in fixing command errors and detecting typos.
+
+SYSTEM CONTEXT:
+- OS: {context['os']}
+- Shell: {context['shell']}
+- Current Directory: {context['cwd']}
+- User: {context['user']}
+- Available Tools: {', '.join(context['available_tools'])}
+
+ERROR TO FIX:
+{error_message}
+
+{f"FAILED COMMAND: {failed_command}" if failed_command else ""}
+
+ERROR CATEGORY: {error_category}
+{f"EXTRACTED INFO: {extracted_info}" if extracted_info else ""}
+{typo_detection_context}
+
+INSTRUCTIONS:
+1. **TYPO DETECTION**: If this is a "command not found" error, first check if the command looks like a typo
+   - Example: 'dockeraa ps' → suggest 'docker ps' (likely meant 'docker')
+   - Example: 'gti status' → suggest 'git status' (likely meant 'git')
+   - Example: 'lls' → suggest 'ls' (extra 'l', likely meant 'ls')
+   - Example: 'pytho --version' → suggest 'python --version' (likely meant 'python')
+
+2. **CONTEXT PRESERVATION**: Keep the same arguments/flags from the original command when suggesting corrections
+
+3. **EXPLANATION**: Clearly explain if you detected a typo and why the suggested correction makes sense
+
+4. **SAFETY**: Ensure suggested commands are safe to execute
+
+5. **ALTERNATIVES**: If multiple interpretations are possible, mention alternatives
+
+RESPONSE FORMAT:
+Provide your response in this exact format:
+
+EXPLANATION:
+[Clear explanation mentioning if this appears to be a typo and why the correction makes sense]
+
+COMMAND:
+[The corrected command to run - preserve original arguments when fixing typos]
+
+SAFETY:
+[Any safety considerations or warnings]
+
+Focus on intelligent typo detection and practical solutions. Be confident in typo corrections when the intent is clear.""""""
+Command Processor - Core logic for AI command assistance
+"""
 
 
 class CommandProcessor:
@@ -25,15 +105,35 @@ class CommandProcessor:
         """Fix a command error using AI assistance."""
         self.logger.debug(f"Processing error: {error_message}")
 
-        # Extract command from error if possible
-        failed_command = self.command_parser.extract_command_from_error(
-            error_message)
+        # Parse the error message format from our fish integration
+        lines = error_message.strip().split('\n')
+        command = None
+        error_text = None
+        exit_code = None
+        status = None
+
+        for line in lines:
+            if line.startswith('Command: '):
+                command = line.replace('Command: ', '').strip()
+            elif line.startswith('Error: '):
+                error_text = line.replace('Error: ', '').strip()
+            elif line.startswith('Exit Code: '):
+                exit_code = line.replace('Exit Code: ', '').strip()
+            elif line.startswith('Status: '):
+                status = line.replace('Status: ', '').strip()
+
+        # If we couldn't parse the structured format, treat whole message as error
+        if not command and not error_text:
+            error_text = error_message
+            command = self.command_parser.extract_command_from_error(
+                error_message)
 
         # Get system context
         context = self._build_system_context()
 
         # Build prompt for error fixing
-        prompt = self._build_fix_prompt(error_message, failed_command, context)
+        prompt = self._build_simple_fix_prompt(
+            command, error_text, exit_code, status, context)
 
         try:
             response = self.ai_client.get_completion(prompt)
@@ -41,6 +141,57 @@ class CommandProcessor:
         except Exception as e:
             self.logger.error(f"AI request failed: {e}")
             return None
+
+    def _build_simple_fix_prompt(self, command: str, error_text: str, exit_code: str, status: str, context: Dict) -> str:
+        """Build a simple, focused prompt for fixing command errors."""
+        # Get available commands for AI reference
+        available_commands = self.command_parser.get_available_commands_context()
+        common_commands_str = ", ".join(
+            available_commands[:20])  # Limit to first 20
+
+        # Determine error type
+        error_type = "UNKNOWN"
+        if status == "COMMAND_NOT_FOUND" or exit_code == "127":
+            error_type = "COMMAND_NOT_FOUND"
+        elif exit_code and exit_code != "0":
+            error_type = "COMMAND_FAILED"
+
+        return f"""You are an expert command-line assistant. Fix this command error and provide a working solution.
+
+SYSTEM INFO:
+- OS: {context['os']}
+- Shell: {context['shell']}
+- Directory: {context['cwd']}
+
+ERROR TO FIX:
+- Command: {command or 'Unknown'}
+- Error: {error_text or 'No error message'}
+- Exit Code: {exit_code or 'Unknown'}
+- Type: {error_type}
+
+COMMON COMMANDS: {common_commands_str}
+
+INSTRUCTIONS:
+1. **TYPO DETECTION**: If this is a "command not found" error, check if it's a typo:
+   - Examples: 'lls' → 'ls', 'dockeraa' → 'docker', 'gti' → 'git'
+   
+2. **KEEP ARGUMENTS**: Preserve any arguments from the original command
+
+3. **BE SPECIFIC**: Give one clear, executable command as the solution
+
+4. **EXPLAIN BRIEFLY**: Why this error occurred and why your fix works
+
+RESPONSE FORMAT:
+EXPLANATION:
+[Brief explanation of the error and why your solution works]
+
+COMMAND:
+[The exact command to run - just the command, no extra formatting]
+
+SAFETY:
+[Any warnings or notes about the command]
+
+Focus on practical solutions. Be confident in typo corrections when the intent is clear."""
 
     def suggest_command(self, description: str) -> Optional[Dict]:
         """Suggest a command based on natural language description."""

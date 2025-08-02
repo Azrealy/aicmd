@@ -156,10 +156,10 @@ def setup_configuration():
 
     if not config_file.exists():
         default_config = {
-            "openai_model": "gpt-3.5-turbo",
+            "openai_model": "gpt-4o-mini",
             "anthropic_model": "claude-3-sonnet-20240229",
-            "max_tokens": 1000,
-            "temperature": 0.1,
+            "max_tokens": 4096,
+            "temperature": 1,
             "auto_execute": False,
             "verbose": False,
             "safety_checks": True,

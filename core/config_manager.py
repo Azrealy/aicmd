@@ -12,17 +12,17 @@ class ConfigManager:
     """Manages configuration for the AI command tool."""
 
     DEFAULT_CONFIG = {
-        'openai_model': 'gpt-4o-mini',
-        'anthropic_model': 'claude-3-sonnet-20240229',
-        'max_tokens': 4096,
-        'temperature': 1,
-        'auto_execute': False,
-        'verbose': False,
-        'safety_checks': True,
-        'cache_responses': True,
-        'cache_duration': 3600,  # 1 hour
-        'terminal_integration': True,
-        'shell_hooks': True
+        "openai_model": "gpt-3.5-turbo",
+        "anthropic_model": "claude-3-sonnet-20240229",
+        "max_tokens": 1000,
+        "temperature": 0.1,
+        "auto_execute": False,
+        "verbose": False,
+        "safety_checks": True,
+        "cache_responses": True,
+        "cache_duration": 3600,
+        "terminal_integration": True,
+        "shell_hooks": True
     }
 
     def __init__(self, config_path: Optional[str] = None):

@@ -17,6 +17,8 @@ class CommandParser:
             (r"bash: (.+): command not found", "command_not_found"),
             (r"zsh: command not found: (.+)", "command_not_found"),
             (r"fish: Unknown command[: ]*(.+)", "command_not_found"),
+            # Add specific fish pattern
+            (r"fish: Unknown command: (.+)", "command_not_found"),
             (r"'(.+)' is not recognized as an internal or external command",
              "command_not_found"),
 
@@ -50,34 +52,68 @@ class CommandParser:
             # Node.js/npm errors
             (r"npm ERR! (.+)", "npm_error"),
             (r"Error: Cannot find module '(.+)'", "node_module_not_found"),
+
+            # Fish-specific errors
+            (r"fish: (.+) is not a valid command", "command_not_found"),
+            (r"fish: (.+) command not found", "command_not_found"),
         ]
 
     def extract_command_from_error(self, error_text: str) -> Optional[str]:
         """Extract the failed command from error text."""
         # Try to find command in common error formats
         patterns = [
-            r"Command '(.+)' failed",
+            # Command not found patterns (capture full command with args)
             r"bash: (.+): command not found",
             r"zsh: command not found: (.+)",
             r"fish: Unknown command[: ]*(.+)",
+            r"'(.+)' is not recognized as an internal or external command",
+
+            # General command failure patterns
+            r"Command '(.+)' failed",
+            r"Command '(.+)' not found",  # Add this pattern
             r"Error running command: (.+)",
             r"Failed to execute: (.+)",
+
+            # From our shell integration
+            r"Command '(.+)' failed with exit code \d+",
+
+            # Simple patterns for single word commands
+            r"Failed command: (.+)",
         ]
 
         for pattern in patterns:
             match = re.search(pattern, error_text)
             if match:
-                return match.group(1).strip()
+                command = match.group(1).strip()
+                # Clean up the command (remove quotes, extra spaces)
+                command = command.strip('\'"')
+                # Remove any parenthetical info like "(full command: ...)"
+                command = re.sub(r'\s*\(full command:.*?\)', '', command)
+                return command
 
-        # Try to extract from shell prompt context
+        # Try to extract from shell prompt context or temporary files
         lines = error_text.split('\n')
         for line in lines:
-            # Look for lines that start with $ or contain shell prompts
-            if re.match(r'^\$\s+(.+)', line.strip()):
-                return re.match(r'^\$\s+(.+)', line.strip()).group(1)
+            line = line.strip()
 
-            # Look for lines that might be commands (no spaces at start, contain command-like text)
-            if not line.startswith(' ') and any(cmd in line for cmd in ['ls', 'cd', 'git', 'npm', 'pip', 'docker']):
+            # Look for lines that start with $ or contain shell prompts
+            if re.match(r'^\$\s+(.+)', line):
+                command = re.match(r'^\$\s+(.+)', line).group(1)
+                return command.strip()
+
+            # Look for "Failed command:" lines
+            if line.startswith('Failed command:'):
+                command = line.replace('Failed command:', '').strip()
+                return command
+
+            # Look for command-like patterns (avoid error messages)
+            if (not line.startswith('Error') and
+                not line.startswith('bash:') and
+                not line.startswith('zsh:') and
+                not line.startswith('fish:') and
+                len(line.split()) <= 5 and  # Reasonable command length
+                    any(cmd_word in line.lower() for cmd_word in ['docker', 'git', 'npm', 'python', 'ls', 'cd', 'pip', 'lls', 'gti'])):
+                # This might be the command line
                 return line.strip()
 
         return None
@@ -168,6 +204,7 @@ class CommandParser:
 
         if error_category == "command_not_found":
             suggestions.extend(self._suggest_command_alternatives(base_cmd))
+            # Remove the hardcoded typo corrections - let AI handle this
         elif error_category == "permission_denied":
             suggestions.append(f"sudo {failed_command}")
             suggestions.append(f"chmod +x {' '.join(parsed['arguments'])}")
@@ -178,6 +215,25 @@ class CommandParser:
                 base_cmd, parsed['arguments']))
 
         return suggestions
+
+    def get_available_commands_context(self) -> List[str]:
+        """Get list of available commands for AI context."""
+        # Common commands that the AI can reference for typo detection
+        common_commands = [
+            'docker', 'git', 'npm', 'node', 'python', 'python3', 'pip', 'pip3',
+            'ls', 'cd', 'pwd', 'mkdir', 'rmdir', 'rm', 'cp', 'mv', 'touch',
+            'cat', 'less', 'more', 'head', 'tail', 'grep', 'find', 'locate',
+            'chmod', 'chown', 'sudo', 'su', 'ps', 'kill', 'killall', 'top',
+            'vim', 'nano', 'emacs', 'code', 'curl', 'wget', 'ssh', 'scp',
+            'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'clear', 'history',
+            'apt', 'apt-get', 'yum', 'dnf', 'brew', 'pacman', 'systemctl',
+            'service', 'mount', 'umount', 'df', 'du', 'free', 'uname',
+            'which', 'whereis', 'man', 'info', 'help', 'alias', 'unalias',
+            'export', 'env', 'printenv', 'echo', 'printf', 'date', 'cal',
+            'uptime', 'whoami', 'id', 'groups', 'w', 'who', 'last',
+            'crontab', 'at', 'jobs', 'bg', 'fg', 'nohup', 'screen', 'tmux'
+        ]
+        return common_commands
 
     def _suggest_command_alternatives(self, command: str) -> List[str]:
         """Suggest alternative commands for command not found errors."""
