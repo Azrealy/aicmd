@@ -121,15 +121,16 @@ Focus on practical solutions. Be confident in typo corrections when the intent i
             self.logger.error(f"AI request failed: {e}")
             return None
 
-    def ask_question(self, question: str) -> Optional[Dict]:
-        """Ask a general question about computers, coding, or technology."""
-        self.logger.debug(f"Processing question: {question}")
+    def ask_question(self, question: str, conversation_context: dict = None) -> Optional[Dict]:
+        """Ask a general question about computers, coding, or technology with context."""
+        self.logger.debug(f"Processing question with context: {question}")
 
         # Get system context for better answers
         context = self._build_system_context()
 
-        # Build prompt for general questions
-        prompt = self._build_chat_prompt(question, context)
+        # Build prompt for general questions with conversation context
+        prompt = self._build_chat_prompt_with_context(
+            question, context, conversation_context)
 
         try:
             response = self.ai_client.get_completion(prompt)
@@ -138,34 +139,43 @@ Focus on practical solutions. Be confident in typo corrections when the intent i
             self.logger.error(f"AI request failed: {e}")
             return None
 
-    def _build_chat_prompt(self, question: str, context: Dict) -> str:
-        """Build prompt for general coding/computer questions."""
-        return f"""You are an expert computer science and programming assistant. Answer questions about programming, system administration, computer science, and technology.
+    def _build_chat_prompt_with_context(self, question: str, context: Dict, conversation_context: dict = None) -> str:
+        """Build simplified prompt for coding/computer questions with conversation context."""
 
-SYSTEM CONTEXT:
-- OS: {context['os']}
-- Shell: {context['shell']}
-- Available Tools: {', '.join(context['available_tools'][:10])}
+        # Build context section if available
+        context_section = ""
+        if conversation_context:
+            context_parts = []
 
-USER QUESTION:
-{question}
+            if conversation_context.get('current_topic'):
+                context_parts.append(
+                    f"Current topic: {conversation_context['current_topic']}")
 
-INSTRUCTIONS:
-1. **BE HELPFUL**: Provide clear, accurate, and practical answers
-2. **INCLUDE EXAMPLES**: When relevant, provide code examples or command examples
-3. **BE SPECIFIC**: Tailor answers to the user's system when possible
-4. **EXPLAIN CONCEPTS**: Break down complex topics into understandable parts
-5. **SUGGEST ALTERNATIVES**: Mention different approaches when applicable
-6. **BE CURRENT**: Use modern best practices and current technologies
+            if conversation_context.get('previous_questions'):
+                recent_q = conversation_context['previous_questions'][-3:]
+                if recent_q:
+                    context_parts.append(
+                        f"Recent questions: {'; '.join(recent_q)}")
 
-RESPONSE FORMAT:
-Provide a clear, well-structured answer. If including code, make sure it's properly formatted and explained.
+            if conversation_context.get('related_qa'):
+                context_parts.append("Related previous answers available")
 
-For code examples or commands, use this format:
-ANSWER:
-[Your detailed explanation]
+            if context_parts:
+                context_section = f"Context: {'. '.join(context_parts)}. "
 
-Focus on being educational and practical. Help the user understand both the 'how' and the 'why'."""
+        return f"""You are a computer scientist and expert programming engineer. Answer technical questions clearly and practically.
+
+{context_section}Question: {question}
+
+Instructions:
+- Give direct, expert-level answers
+- Use # for titles and headings
+- Highlight code with ```language blocks
+- Be concise but complete
+- Include practical examples when helpful
+- Reference previous context if relevant
+
+Format your response with proper markdown formatting."""
 
     def _parse_chat_response(self, response: str) -> Dict:
         """Parse chat response into structured format."""

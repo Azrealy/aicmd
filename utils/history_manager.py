@@ -2,9 +2,11 @@
 History Manager - Handles command history with arrow key navigation
 """
 
+import os
 import readline
+import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 class HistoryManager:
@@ -143,11 +145,150 @@ class HistoryManager:
             return input(prompt)
 
 
+class ConversationContext:
+    """Manages conversation context for AI chat mode."""
+
+    def __init__(self, history_manager):
+        self.history_manager = history_manager
+        self.conversation_memory = []
+        self.max_context_messages = 10  # Keep last 10 Q&A pairs
+        self.current_topic = None
+        self.related_commands = []
+
+    def add_qa_pair(self, question: str, answer: str, has_code: bool = False):
+        """Add a question-answer pair to conversation memory."""
+        qa_pair = {
+            'question': question,
+            'answer': answer,
+            'has_code': has_code,
+            'timestamp': time.time()
+        }
+
+        self.conversation_memory.append(qa_pair)
+
+        # Keep only recent messages to avoid token limits
+        if len(self.conversation_memory) > self.max_context_messages:
+            self.conversation_memory = self.conversation_memory[-self.max_context_messages:]
+
+        # Update current topic based on recent questions
+        self._update_current_topic()
+
+    def get_context_for_question(self, current_question: str) -> dict:
+        """Get relevant context for the current question."""
+        context = {
+            'previous_questions': [],
+            'recent_topics': [],
+            'related_qa': [],
+            'current_topic': self.current_topic
+        }
+
+        # Get recent questions for context
+        recent_history = self.history_manager.get_history(5)
+        context['previous_questions'] = recent_history
+
+        # Find related Q&A pairs from conversation memory
+        context['related_qa'] = self._find_related_qa(current_question)
+
+        # Extract topics from recent conversation
+        context['recent_topics'] = self._extract_recent_topics()
+
+        return context
+
+    def _update_current_topic(self):
+        """Update current topic based on recent questions."""
+        if not self.conversation_memory:
+            return
+
+        recent_questions = [qa['question']
+                            for qa in self.conversation_memory[-3:]]
+
+        # Simple topic detection based on keywords
+        topics = {
+            'git': ['git', 'repository', 'commit', 'branch', 'merge', 'push', 'pull'],
+            'python': ['python', 'django', 'flask', 'pandas', 'numpy', 'pip'],
+            'javascript': ['javascript', 'node', 'npm', 'react', 'vue', 'angular'],
+            'docker': ['docker', 'container', 'image', 'dockerfile', 'compose'],
+            'linux': ['linux', 'ubuntu', 'bash', 'shell', 'terminal', 'command'],
+            'database': ['sql', 'database', 'mysql', 'postgresql', 'mongodb', 'query'],
+            'web': ['http', 'api', 'rest', 'web', 'server', 'client', 'html', 'css']
+        }
+
+        topic_scores = {}
+        for topic, keywords in topics.items():
+            score = 0
+            for question in recent_questions:
+                question_lower = question.lower()
+                for keyword in keywords:
+                    if keyword in question_lower:
+                        score += 1
+            topic_scores[topic] = score
+
+        # Set current topic to the highest scoring one
+        if topic_scores and max(topic_scores.values()) > 0:
+            self.current_topic = max(topic_scores, key=topic_scores.get)
+
+    def _find_related_qa(self, current_question: str) -> list:
+        """Find related Q&A pairs from conversation memory."""
+        if not self.conversation_memory:
+            return []
+
+        current_words = set(current_question.lower().split())
+        related_qa = []
+
+        for qa in self.conversation_memory[-5:]:  # Check last 5 Q&A pairs
+            question_words = set(qa['question'].lower().split())
+
+            # Calculate similarity based on common words
+            common_words = current_words.intersection(question_words)
+            if len(common_words) >= 2:  # At least 2 common words
+                related_qa.append({
+                    'question': qa['question'],
+                    'answer': qa['answer'][:200] + '...' if len(qa['answer']) > 200 else qa['answer'],
+                    'similarity': len(common_words)
+                })
+
+        # Sort by similarity and return top 3
+        related_qa.sort(key=lambda x: x['similarity'], reverse=True)
+        return related_qa[:3]
+
+    def _extract_recent_topics(self) -> list:
+        """Extract topics from recent conversation."""
+        if not self.conversation_memory:
+            return []
+
+        topics = set()
+        for qa in self.conversation_memory[-3:]:
+            question = qa['question'].lower()
+
+            # Extract programming languages
+            languages = ['python', 'javascript', 'java',
+                         'c++', 'go', 'rust', 'php', 'ruby']
+            for lang in languages:
+                if lang in question:
+                    topics.add(lang)
+
+            # Extract technologies
+            technologies = ['git', 'docker', 'kubernetes',
+                            'react', 'vue', 'angular', 'django', 'flask']
+            for tech in technologies:
+                if tech in question:
+                    topics.add(tech)
+
+        return list(topics)
+
+    def clear_context(self):
+        """Clear conversation context."""
+        self.conversation_memory = []
+        self.current_topic = None
+        self.related_commands = []
+
+
 class AdvancedHistoryManager(HistoryManager):
     """Enhanced history manager with more features."""
 
     def __init__(self, history_type: str = "general"):
         super().__init__(history_type)
+        self.conversation_context = ConversationContext(self)
         self.setup_advanced_features()
 
     def setup_advanced_features(self):
@@ -167,6 +308,22 @@ class AdvancedHistoryManager(HistoryManager):
 
         except Exception:
             pass
+
+    def add_qa_to_context(self, question: str, answer: str, has_code: bool = False):
+        """Add question-answer pair to conversation context."""
+        self.conversation_context.add_qa_pair(question, answer, has_code)
+
+    def get_conversation_context(self, current_question: str) -> dict:
+        """Get conversation context for current question."""
+        return self.conversation_context.get_context_for_question(current_question)
+
+    def clear_conversation_context(self):
+        """Clear conversation context."""
+        self.conversation_context.clear_context()
+
+    def get_current_topic(self) -> str:
+        """Get current conversation topic."""
+        return self.conversation_context.current_topic
 
     def add_command_with_metadata(self, command: str, result_type: str = "unknown"):
         """Add command with metadata (timestamp, type, etc.)."""

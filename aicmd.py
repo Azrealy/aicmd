@@ -616,8 +616,10 @@ def chat_mode(processor, logger):
     logger.info(
         "Ask questions about programming, system administration, or computer science.")
     logger.info(
-        "Type 'quit' to exit, 'help' for commands, 'history' to show history\n")
+        "Type 'quit' to exit, 'help' for commands, 'history' to show history")
     logger.info("💡 Use ↑↓ arrow keys to navigate command history")
+    logger.info(
+        "🧠 Context-aware: I'll remember our conversation to give better answers\n")
 
     # Initialize history manager for chat mode
     history = AdvancedHistoryManager("chat")
@@ -645,6 +647,15 @@ def chat_mode(processor, logger):
                 history.show_history()
                 continue
 
+            if user_input.lower() == 'context':
+                show_conversation_context(history)
+                continue
+
+            if user_input.lower() == 'clear-context':
+                history.clear_conversation_context()
+                logger.success("🧠 Conversation context cleared!")
+                continue
+
             if user_input.lower().startswith('search '):
                 query = user_input[7:].strip()
                 if query:
@@ -667,10 +678,18 @@ def chat_mode(processor, logger):
             # Add to history before processing
             history.add_command_with_metadata(user_input, "chat")
 
-            # Process the question
+            # Get conversation context for this question
+            conversation_context = history.get_conversation_context(user_input)
+
+            # Show context info if there's relevant context
+            if conversation_context.get('current_topic'):
+                logger.debug(
+                    f"💭 Current topic: {conversation_context['current_topic']}")
+
+            # Process the question with context
             logger.progress("Thinking...")
-            result = processor.ask_question(user_input)
-            logger.info(result)
+            result = processor.ask_question(user_input, conversation_context)
+            print(result)
 
         except EOFError:
             break
@@ -680,6 +699,38 @@ def chat_mode(processor, logger):
 
     # Save history on exit
     history.save_session()
+
+
+def show_conversation_context(history):
+    """Show current conversation context."""
+    current_topic = history.get_current_topic()
+
+    print("\n🧠 Current Conversation Context:")
+    print("=" * 40)
+
+    if current_topic:
+        print(f"📍 Current Topic: {current_topic}")
+    else:
+        print("📍 Current Topic: Not detected yet")
+
+    # Show recent conversation summary
+    context = history.get_conversation_context("")
+
+    if context.get('recent_topics'):
+        print(f"🏷️  Recent Topics: {', '.join(context['recent_topics'])}")
+
+    if context.get('previous_questions'):
+        recent = context['previous_questions'][-3:]
+        if recent:
+            print(f"\n📝 Recent Questions:")
+            for i, q in enumerate(recent, 1):
+                print(f"   {i}. {q}")
+
+    # Show conversation memory stats
+    memory_size = len(history.conversation_context.conversation_memory)
+    print(f"\n💾 Conversation Memory: {memory_size} Q&A pairs stored")
+
+    print()
 
 
 def show_chat_help():
@@ -746,5 +797,4 @@ You can also just type a description and it will be treated as a suggestion requ
 
 
 if __name__ == '__main__':
-    main()
     main()
