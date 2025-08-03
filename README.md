@@ -41,8 +41,11 @@ export ANTHROPIC_API_KEY="your-anthropic-key"
 ### Basic Usage
 
 ```bash
-# Fix a command error
+# Fix a command error (with error message)
 aicmd fix "ls: cannot access 'nonexistent': No such file or directory"
+
+# Fix the last command error automatically (NEW!)
+aicmd fix
 
 # Get command suggestions
 aicmd suggest "compress files in a directory"
@@ -56,15 +59,17 @@ aicmd --interactive
 
 ## Usage Examples 📚
 
-### Error Fixing
+### Automatic Error Detection (NEW!)
 
 ```bash
 $ ls nonexistent-file
 ls: cannot access 'nonexistent-file': No such file or directory
 
-$ aicmd fix "ls: cannot access 'nonexistent-file': No such file or directory"
-🤖 AI Response:
+$ aicmd fix
+🤖 Detected error: Command 'ls nonexistent-file' failed with exit code 2:
+ls: cannot access 'nonexistent-file': No such file or directory
 
+AI Response:
 The error occurs because you're trying to list a file that doesn't exist. Here are some solutions:
 
 COMMAND:

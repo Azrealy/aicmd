@@ -4,10 +4,11 @@ AI Command Tool - Main Entry Point
 A smart command-line assistant that fixes errors and provides command advice.
 """
 
-from utils.logger import Logger
+from utils.history_manager import AdvancedHistoryManager
 from utils.terminal_utils import TerminalUtils
 from core.config_manager import ConfigManager
 from core.command_processor import CommandProcessor
+from utils.logger import Logger
 import sys
 import argparse
 import os
@@ -27,9 +28,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  aicmd fix "ls: cannot access 'nonexistent': No such file or directory"
+  aicmd fix                    # Auto-detect and fix last error
+  aicmd fix "command failed"   # Fix specific error message
   aicmd suggest "compress files"
-  aicmd explain "find . -name '*.py' -exec grep -l 'import' {} \\;"
+  aicmd explain "find . -name '*.py'"
+  aicmd chat "How do I use Git?"         # Ask coding questions
+  aicmd chat                   # Start interactive chat mode
+  aicmd test                   # Test error detection system
+  aicmd cleanup                # Clean up temp files
   aicmd --interactive
         """
     )
@@ -37,7 +43,8 @@ Examples:
     parser.add_argument(
         'action',
         nargs='?',
-        choices=['fix', 'suggest', 'explain', 'setup', 'cleanup'],
+        choices=['fix', 'suggest', 'explain',
+                 'setup', 'cleanup', 'test', 'chat'],
         help='Action to perform'
     )
 
@@ -83,6 +90,15 @@ Examples:
         elif args.action == 'cleanup':
             cleanup_temp_files(logger)
             logger.success("Cleaned up temporary files")
+        elif args.action == 'test':
+            test_error_detection(logger)
+        elif args.action == 'chat':
+            if args.input_text:
+                input_str = ' '.join(args.input_text)
+                handle_single_command(
+                    'chat', input_str, processor, logger, args.auto_execute)
+            else:
+                chat_mode(processor, logger)
         elif args.interactive:
             interactive_mode(processor, logger)
         elif args.action and (args.input_text or args.action == 'fix'):
@@ -153,11 +169,15 @@ function command_not_found_handler() {
 def interactive_mode(processor, logger):
     """Start interactive mode."""
     logger.info("AI Command Assistant - Interactive Mode")
-    logger.info("Type 'help' for commands, 'quit' to exit\n")
+    logger.info("Type 'help' for commands, 'quit' to exit")
+    logger.info("💡 Use ↑↓ arrow keys to navigate command history\n")
+
+    # Initialize history manager for interactive mode
+    history = AdvancedHistoryManager("interactive")
 
     while True:
         try:
-            user_input = input("aicmd> ").strip()
+            user_input = history.get_input_with_history("aicmd> ").strip()
 
             if not user_input:
                 continue
@@ -169,12 +189,41 @@ def interactive_mode(processor, logger):
                 show_help()
                 continue
 
+            if user_input.lower() == 'clear':
+                os.system('clear' if os.name == 'posix' else 'cls')
+                continue
+
+            if user_input.lower() == 'history':
+                history.show_history()
+                continue
+
+            if user_input.lower().startswith('search '):
+                query = user_input[7:].strip()
+                if query:
+                    results = history.search_history(query)
+                    if results:
+                        logger.info(
+                            f"🔍 Found {len(results)} commands matching '{query}':")
+                        for i, cmd in enumerate(results[-10:], 1):
+                            logger.info(f"  {i}. {cmd}")
+                    else:
+                        logger.info(f"No commands found matching '{query}'")
+                continue
+
+            if user_input.lower() == 'clear-history':
+                history.clear_history()
+                logger.success("🧹 History cleared!")
+                continue
+
             # Parse interactive command
             parts = user_input.split(' ', 1)
             action = parts[0].lower()
             text = parts[1] if len(parts) > 1 else ""
 
-            if action in ['fix', 'suggest', 'explain']:
+            # Add to history before processing
+            history.add_command_with_metadata(user_input, action)
+
+            if action in ['fix', 'suggest', 'explain', 'chat']:
                 if action == 'fix' and not text:
                     # Handle fix without text - auto-detect error
                     logger.info(
@@ -188,9 +237,14 @@ def interactive_mode(processor, logger):
                             "No recent error detected. Please provide an error message.")
                         logger.info("Usage: fix \"your error message\"")
                         continue
-                elif not text and action != 'fix':
+                elif not text and action not in ['fix', 'chat']:
                     logger.error(f"Please provide text for '{action}' command")
                     continue
+                elif action == 'chat' and not text:
+                    # Start interactive chat if no question provided
+                    chat_mode(processor, logger)
+                    continue
+
                 handle_single_command(action, text, processor, logger, False)
             else:
                 # Treat as a command suggestion request
@@ -199,6 +253,9 @@ def interactive_mode(processor, logger):
 
         except EOFError:
             break
+
+    # Save history on exit
+    history.save_session()
 
 
 def handle_single_command(action, input_text, processor, logger, auto_execute):
@@ -223,22 +280,31 @@ def handle_single_command(action, input_text, processor, logger, auto_execute):
         result = processor.suggest_command(input_text)
     elif action == 'explain':
         result = processor.explain_command(input_text)
+    elif action == 'chat':
+        result = processor.ask_question(input_text)
     else:
         logger.error(f"Unknown action: {action}")
         return
 
     if result:
-        logger.info(result['explanation'])
+        if action == 'chat':
+            # Handle chat responses differently
+            logger.ai_response(result['answer'])
+            if 'code' in result and result['code']:
+                logger.code_block(result['code'], result.get('language', ''))
+        else:
+            # Handle command-related responses
+            logger.info(result['explanation'])
 
-        if 'command' in result and result['command']:
-            logger.info(f"\nSuggested command:")
-            logger.info(f"  {result['command']}")
+            if 'command' in result and result['command']:
+                logger.info(f"\nSuggested command:")
+                logger.info(f"  {result['command']}")
 
-            if auto_execute:
-                execute_command(result['command'], logger)
-            else:
-                if should_execute_command():
+                if auto_execute:
                     execute_command(result['command'], logger)
+                else:
+                    if should_execute_command():
+                        execute_command(result['command'], logger)
 
 
 def handle_smart_mode(processor, logger, auto_execute):
@@ -492,6 +558,168 @@ def get_error_from_stderr_capture(logger):
     return None
 
 
+def test_error_detection(logger):
+    """Test the error detection system."""
+    logger.info("🧪 Testing error detection system...")
+
+    error_file = '/tmp/aicmd_last_error.txt'
+
+    # Test 1: Check if error file exists
+    if os.path.exists(error_file):
+        logger.success(f"✓ Error file exists: {error_file}")
+
+        # Show file age
+        file_age = time.time() - os.path.getmtime(error_file)
+        logger.info(f"📅 File age: {file_age:.1f} seconds")
+
+        # Show file contents
+        try:
+            with open(error_file, 'r') as f:
+                content = f.read().strip()
+                logger.info(f"📄 File contents:\n{content}")
+        except Exception as e:
+            logger.error(f"Could not read file: {e}")
+
+    else:
+        logger.warning(f"⚠ No error file found at: {error_file}")
+        logger.info("💡 To create an error file, try:")
+        logger.info("   1. Run a command that fails (e.g., 'lls')")
+        logger.info("   2. Make sure Fish integration is loaded")
+        logger.info("   3. Or create manually for testing:")
+        logger.info(f"      echo 'Command: lls' > {error_file}")
+
+    # Test 2: Test error detection function
+    logger.info("\n🔍 Testing error detection function...")
+    error = detect_last_error(logger)
+    if error:
+        logger.success("✓ Error detection successful")
+        logger.info(f"Detected error:\n{error}")
+    else:
+        logger.warning("⚠ No error detected by function")
+
+    # Test 3: Check file permissions
+    logger.info("\n🔒 Testing file permissions...")
+    try:
+        # Try to create a test file
+        test_file = '/tmp/aicmd_test.txt'
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        logger.success("✓ Can write to /tmp directory")
+    except Exception as e:
+        logger.error(f"✗ Cannot write to /tmp directory: {e}")
+
+
+def chat_mode(processor, logger):
+    """Start chat mode for general computer and coding questions."""
+    logger.banner("AI Chat Mode - Computer & Coding Assistant")
+    logger.info(
+        "Ask questions about programming, system administration, or computer science.")
+    logger.info(
+        "Type 'quit' to exit, 'help' for commands, 'history' to show history\n")
+    logger.info("💡 Use ↑↓ arrow keys to navigate command history")
+
+    # Initialize history manager for chat mode
+    history = AdvancedHistoryManager("chat")
+
+    while True:
+        try:
+            user_input = history.get_input_with_history("💬 Ask: ").strip()
+
+            if not user_input:
+                continue
+
+            if user_input.lower() in ['quit', 'exit', 'q']:
+                logger.info("Goodbye! 👋")
+                break
+
+            if user_input.lower() == 'help':
+                show_chat_help()
+                continue
+
+            if user_input.lower() == 'clear':
+                os.system('clear' if os.name == 'posix' else 'cls')
+                continue
+
+            if user_input.lower() == 'history':
+                history.show_history()
+                continue
+
+            if user_input.lower().startswith('search '):
+                query = user_input[7:].strip()
+                if query:
+                    results = history.search_history(query)
+                    if results:
+                        logger.info(
+                            f"🔍 Found {len(results)} commands matching '{query}':")
+                        # Show last 10 matches
+                        for i, cmd in enumerate(results[-10:], 1):
+                            logger.info(f"  {i}. {cmd}")
+                    else:
+                        logger.info(f"No commands found matching '{query}'")
+                continue
+
+            if user_input.lower() == 'clear-history':
+                history.clear_history()
+                logger.success("🧹 History cleared!")
+                continue
+
+            # Add to history before processing
+            history.add_command_with_metadata(user_input, "chat")
+
+            # Process the question
+            logger.progress("Thinking...")
+            result = processor.ask_question(user_input)
+            logger.info(result)
+
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            logger.info("\nGoodbye! 👋")
+            break
+
+    # Save history on exit
+    history.save_session()
+
+
+def show_chat_help():
+    """Show chat mode help."""
+    help_text = """
+💬 Chat Mode Commands:
+  help           - Show this help message
+  clear          - Clear the screen
+  history        - Show command history
+  search <query> - Search command history
+  clear-history  - Clear all history
+  quit/q         - Exit chat mode
+
+💡 Navigation:
+  ↑ (Up Arrow)   - Previous command in history
+  ↓ (Down Arrow) - Next command in history
+  Ctrl+R         - Reverse search history
+  Ctrl+L         - Clear screen
+  Ctrl+U         - Clear current line
+
+💡 Example Questions:
+  "How do I iterate over a list in Python?"
+  "What's the difference between TCP and UDP?"
+  "How to check disk usage in Linux?"
+  "Explain Git merge vs rebase"
+  "How to optimize database queries?"
+  "What is Docker and how does it work?"
+
+You can ask about:
+🐍 Programming (Python, JavaScript, Go, Rust, etc.)
+🖥️  System Administration (Linux, macOS, Windows)
+🌐 Web Development (HTML, CSS, React, etc.)
+📊 Databases (SQL, NoSQL, optimization)
+🔧 DevOps (Docker, Kubernetes, CI/CD)
+🔒 Security (best practices, tools)
+📚 Computer Science concepts
+"""
+    print(help_text)
+
+
 def show_help():
     """Show interactive mode help."""
     help_text = """
@@ -499,8 +727,18 @@ Available commands:
   fix [error_message]     - Fix a command error (auto-detects if no message provided)
   suggest <description>   - Suggest a command for a task
   explain <command>       - Explain what a command does
+  chat [question]         - Ask coding/computer questions (starts chat mode if no question)
+  history                 - Show command history
+  search <query>          - Search command history
+  clear-history          - Clear all history
+  clear                  - Clear the screen
   help                   - Show this help message
-  quit/exit/q           - Exit interactive mode
+  quit/exit/q            - Exit interactive mode
+
+💡 Navigation:
+  ↑ (Up Arrow)   - Previous command in history
+  ↓ (Down Arrow) - Next command in history
+  Ctrl+R         - Reverse search history
 
 You can also just type a description and it will be treated as a suggestion request.
 """
@@ -508,4 +746,5 @@ You can also just type a description and it will be treated as a suggestion requ
 
 
 if __name__ == '__main__':
+    main()
     main()

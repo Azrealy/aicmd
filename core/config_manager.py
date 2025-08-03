@@ -54,15 +54,6 @@ class ConfigManager:
 
         return config
 
-    def save_config(self):
-        """Save current configuration to file."""
-        try:
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, 'w') as f:
-                json.dump(self.config, f, indent=2)
-        except IOError as e:
-            raise Exception(f"Could not save config file: {e}")
-
     def get(self, key: str, default=None):
         """Get configuration value."""
         return self.config.get(key, default)
@@ -107,56 +98,3 @@ class ConfigManager:
     def get_custom_endpoint(self) -> Optional[str]:
         """Get custom endpoint URL."""
         return self.config.get('custom_endpoint')
-
-    def update_config(self, updates: Dict[str, Any]):
-        """Update multiple configuration values."""
-        self.config.update(updates)
-
-    def reset_to_defaults(self):
-        """Reset configuration to defaults."""
-        self.config = self.DEFAULT_CONFIG.copy()
-
-    def validate_config(self) -> tuple[bool, list]:
-        """Validate current configuration."""
-        errors = []
-
-        # Check if at least one API key is available
-        if not self.get_api_key():
-            errors.append(
-                "No API key configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable.")
-
-        # Validate numeric values
-        numeric_fields = ['max_tokens', 'temperature', 'cache_duration']
-        for field in numeric_fields:
-            value = self.get(field)
-            if value is not None and not isinstance(value, (int, float)):
-                errors.append(f"'{field}' must be a number")
-
-        # Validate temperature range
-        temp = self.get('temperature')
-        if temp is not None and (temp < 0 or temp > 2):
-            errors.append("'temperature' must be between 0 and 2")
-
-        # Validate max_tokens
-        max_tokens = self.get('max_tokens')
-        if max_tokens is not None and (max_tokens < 1 or max_tokens > 8000):
-            errors.append("'max_tokens' must be between 1 and 8000")
-
-        return len(errors) == 0, errors
-
-    def get_config_summary(self) -> Dict[str, Any]:
-        """Get a summary of current configuration (without sensitive data)."""
-        summary = self.config.copy()
-
-        # Remove sensitive information
-        sensitive_keys = ['openai_api_key', 'anthropic_api_key']
-        for key in sensitive_keys:
-            if key in summary:
-                summary[key] = '***' if summary[key] else None
-
-        # Add derived information
-        summary['has_openai_key'] = bool(self.get_openai_key())
-        summary['has_anthropic_key'] = bool(self.get_anthropic_key())
-        summary['config_file'] = str(self.config_path)
-
-        return summary

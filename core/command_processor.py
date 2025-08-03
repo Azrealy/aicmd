@@ -2,93 +2,7 @@ import os
 from utils.system_info import SystemInfo
 from utils.command_parser import CommandParser
 from .ai_client import AIClient
-from typing import Dict, Optional, List
-import subprocess
-import platform
-
-
-def _build_fix_prompt(self, error_message: str, failed_command: str, context: Dict) -> str:
-    """Build prompt for fixing command errors."""
-    # Extract command from error if not already provided
-    if not failed_command:
-        failed_command = self.command_parser.extract_command_from_error(
-            error_message)
-
-    # Categorize the error to provide better context
-    error_category, extracted_info = self.command_parser.categorize_error(
-        error_message)
-
-    # Get available commands for AI reference - NOW USING THE FUNCTION!
-    available_commands = self.command_parser.get_available_commands_context()
-    common_commands_str = ", ".join(available_commands)
-
-    # Build special context for command not found errors
-    typo_detection_context = ""
-    if error_category == "command_not_found" and failed_command:
-        typo_detection_context = f"""
-TYPO DETECTION REQUIRED:
-The command '{failed_command}' was not found. This is likely a typo or misspelling.
-
-Common commands for reference: {common_commands_str}
-
-Please analyze if '{failed_command}' is a typo of a common command. Consider:
-- Similar spelling (e.g., 'dockeraa' → 'docker', 'lls' → 'ls')
-- Missing/extra characters (e.g., 'gti' → 'git')
-- Keyboard proximity errors (e.g., 'pytho' → 'python')
-- Common typing mistakes
-- Double letters (e.g., 'lls' → 'ls', 'gitt' → 'git')
-
-If you detect a likely typo, suggest the correct command with the same arguments.
-"""
-
-    return f"""You are an expert command-line assistant specialized in fixing command errors and detecting typos.
-
-SYSTEM CONTEXT:
-- OS: {context['os']}
-- Shell: {context['shell']}
-- Current Directory: {context['cwd']}
-- User: {context['user']}
-- Available Tools: {', '.join(context['available_tools'])}
-
-ERROR TO FIX:
-{error_message}
-
-{f"FAILED COMMAND: {failed_command}" if failed_command else ""}
-
-ERROR CATEGORY: {error_category}
-{f"EXTRACTED INFO: {extracted_info}" if extracted_info else ""}
-{typo_detection_context}
-
-INSTRUCTIONS:
-1. **TYPO DETECTION**: If this is a "command not found" error, first check if the command looks like a typo
-   - Example: 'dockeraa ps' → suggest 'docker ps' (likely meant 'docker')
-   - Example: 'gti status' → suggest 'git status' (likely meant 'git')
-   - Example: 'lls' → suggest 'ls' (extra 'l', likely meant 'ls')
-   - Example: 'pytho --version' → suggest 'python --version' (likely meant 'python')
-
-2. **CONTEXT PRESERVATION**: Keep the same arguments/flags from the original command when suggesting corrections
-
-3. **EXPLANATION**: Clearly explain if you detected a typo and why the suggested correction makes sense
-
-4. **SAFETY**: Ensure suggested commands are safe to execute
-
-5. **ALTERNATIVES**: If multiple interpretations are possible, mention alternatives
-
-RESPONSE FORMAT:
-Provide your response in this exact format:
-
-EXPLANATION:
-[Clear explanation mentioning if this appears to be a typo and why the correction makes sense]
-
-COMMAND:
-[The corrected command to run - preserve original arguments when fixing typos]
-
-SAFETY:
-[Any safety considerations or warnings]
-
-Focus on intelligent typo detection and practical solutions. Be confident in typo corrections when the intent is clear.""""""
-Command Processor - Core logic for AI command assistance
-"""
+from typing import Dict, Optional
 
 
 class CommandProcessor:
@@ -207,6 +121,109 @@ Focus on practical solutions. Be confident in typo corrections when the intent i
             self.logger.error(f"AI request failed: {e}")
             return None
 
+    def ask_question(self, question: str) -> Optional[Dict]:
+        """Ask a general question about computers, coding, or technology."""
+        self.logger.debug(f"Processing question: {question}")
+
+        # Get system context for better answers
+        context = self._build_system_context()
+
+        # Build prompt for general questions
+        prompt = self._build_chat_prompt(question, context)
+
+        try:
+            response = self.ai_client.get_completion(prompt)
+            return response
+        except Exception as e:
+            self.logger.error(f"AI request failed: {e}")
+            return None
+
+    def _build_chat_prompt(self, question: str, context: Dict) -> str:
+        """Build prompt for general coding/computer questions."""
+        return f"""You are an expert computer science and programming assistant. Answer questions about programming, system administration, computer science, and technology.
+
+SYSTEM CONTEXT:
+- OS: {context['os']}
+- Shell: {context['shell']}
+- Available Tools: {', '.join(context['available_tools'][:10])}
+
+USER QUESTION:
+{question}
+
+INSTRUCTIONS:
+1. **BE HELPFUL**: Provide clear, accurate, and practical answers
+2. **INCLUDE EXAMPLES**: When relevant, provide code examples or command examples
+3. **BE SPECIFIC**: Tailor answers to the user's system when possible
+4. **EXPLAIN CONCEPTS**: Break down complex topics into understandable parts
+5. **SUGGEST ALTERNATIVES**: Mention different approaches when applicable
+6. **BE CURRENT**: Use modern best practices and current technologies
+
+RESPONSE FORMAT:
+Provide a clear, well-structured answer. If including code, make sure it's properly formatted and explained.
+
+For code examples or commands, use this format:
+ANSWER:
+[Your detailed explanation]
+
+Focus on being educational and practical. Help the user understand both the 'how' and the 'why'."""
+
+    def _parse_chat_response(self, response: str) -> Dict:
+        """Parse chat response into structured format."""
+        result = {
+            'action': 'chat',
+            'raw_response': response
+        }
+
+        # Try to extract code sections
+        lines = response.split('\n')
+        answer_lines = []
+        code_lines = []
+        language = ""
+
+        current_section = "answer"
+
+        for line in lines:
+            line_upper = line.strip().upper()
+
+            if line_upper.startswith('CODE:'):
+                current_section = "code"
+                continue
+            elif line_upper.startswith('LANGUAGE:'):
+                language = line.replace('LANGUAGE:', '').replace(
+                    'Language:', '').strip()
+                continue
+            elif line_upper.startswith('ANSWER:'):
+                current_section = "answer"
+                continue
+
+            if current_section == "answer":
+                answer_lines.append(line)
+            elif current_section == "code":
+                code_lines.append(line)
+
+        # Clean up the answer
+        answer = '\n'.join(answer_lines).strip()
+        if answer.startswith('ANSWER:'):
+            answer = answer.replace('ANSWER:', '').strip()
+
+        result['answer'] = answer if answer else response
+
+        # Add code if found
+        if code_lines:
+            code = '\n'.join(code_lines).strip()
+            # Remove markdown code blocks if present
+            if code.startswith('```') and code.endswith('```'):
+                code_lines = code.split('\n')
+                if len(code_lines) > 2:
+                    # Remove first and last lines (```)
+                    code = '\n'.join(code_lines[1:-1])
+                    # Extract language from first line if present
+                    if not language and code_lines[0].startswith('```'):
+                        language = code_lines[0].replace('```', '').strip()
+
+            result['code'] = code
+            result['language'] = language.lower() if language else 'text'
+
     def explain_command(self, command: str) -> Optional[Dict]:
         """Explain what a command does."""
         self.logger.debug(f"Explaining command: {command}")
@@ -231,43 +248,6 @@ Focus on practical solutions. Be confident in typo corrections when the intent i
             'available_tools': self.system_info.get_available_tools(),
             'recent_commands': self.system_info.get_recent_commands()
         }
-
-    def _build_fix_prompt(self, error_message: str, failed_command: str, context: Dict) -> str:
-        """Build prompt for fixing command errors."""
-        return f"""You are an expert command-line assistant. Help fix command errors and provide working solutions.
-
-SYSTEM CONTEXT:
-- OS: {context['os']}
-- Shell: {context['shell']}
-- Current Directory: {context['cwd']}
-- User: {context['user']}
-- Available Tools: {', '.join(context['available_tools'])}
-
-ERROR TO FIX:
-{error_message}
-
-{f"FAILED COMMAND: {failed_command}" if failed_command else ""}
-
-REQUIREMENTS:
-1. Provide a clear explanation of what went wrong
-2. Give a corrected command that should work
-3. Explain why the fix works
-4. Make sure the command is safe to execute
-5. Consider the user's current system and environment
-
-RESPONSE FORMAT:
-Provide your response in this exact format:
-
-EXPLANATION:
-[Clear explanation of the error and solution]
-
-COMMAND:
-[The corrected command to run]
-
-SAFETY:
-[Any safety considerations or warnings]
-
-Focus on practical, executable solutions. Be concise but thorough."""
 
     def _build_suggest_prompt(self, description: str, context: Dict) -> str:
         """Build prompt for command suggestions."""

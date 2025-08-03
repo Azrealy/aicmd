@@ -80,7 +80,8 @@ def copy_project_files(install_dir):
         'utils/terminal_utils.py',
         'utils/command_parser.py',
         'utils/system_info.py',
-        'utils/logger.py'
+        'utils/logger.py',
+        'utils/history_manager.py'
     ]
 
     current_dir = Path(__file__).parent
@@ -158,7 +159,7 @@ def setup_configuration():
         default_config = {
             "openai_model": "gpt-4o-mini",
             "anthropic_model": "claude-3-sonnet-20240229",
-            "max_tokens": 4096,
+            "max_tokens": 8096,
             "temperature": 1,
             "auto_execute": False,
             "verbose": False,
