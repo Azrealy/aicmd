@@ -177,63 +177,6 @@ Instructions:
 
 Format your response with proper markdown formatting."""
 
-    def _parse_chat_response(self, response: str) -> Dict:
-        """Parse chat response into structured format."""
-        result = {
-            'action': 'chat',
-            'raw_response': response
-        }
-
-        # Try to extract code sections
-        lines = response.split('\n')
-        answer_lines = []
-        code_lines = []
-        language = ""
-
-        current_section = "answer"
-
-        for line in lines:
-            line_upper = line.strip().upper()
-
-            if line_upper.startswith('CODE:'):
-                current_section = "code"
-                continue
-            elif line_upper.startswith('LANGUAGE:'):
-                language = line.replace('LANGUAGE:', '').replace(
-                    'Language:', '').strip()
-                continue
-            elif line_upper.startswith('ANSWER:'):
-                current_section = "answer"
-                continue
-
-            if current_section == "answer":
-                answer_lines.append(line)
-            elif current_section == "code":
-                code_lines.append(line)
-
-        # Clean up the answer
-        answer = '\n'.join(answer_lines).strip()
-        if answer.startswith('ANSWER:'):
-            answer = answer.replace('ANSWER:', '').strip()
-
-        result['answer'] = answer if answer else response
-
-        # Add code if found
-        if code_lines:
-            code = '\n'.join(code_lines).strip()
-            # Remove markdown code blocks if present
-            if code.startswith('```') and code.endswith('```'):
-                code_lines = code.split('\n')
-                if len(code_lines) > 2:
-                    # Remove first and last lines (```)
-                    code = '\n'.join(code_lines[1:-1])
-                    # Extract language from first line if present
-                    if not language and code_lines[0].startswith('```'):
-                        language = code_lines[0].replace('```', '').strip()
-
-            result['code'] = code
-            result['language'] = language.lower() if language else 'text'
-
     def explain_command(self, command: str) -> Optional[Dict]:
         """Explain what a command does."""
         self.logger.debug(f"Explaining command: {command}")
@@ -279,6 +222,16 @@ REQUIREMENTS:
 3. Include any necessary flags or options
 4. Warn about potentially destructive operations
 5. Consider the user's current system and available tools
+6. **IMPORTANT**: Use placeholders for user-specific values that need to be replaced
+
+PLACEHOLDER INSTRUCTIONS:
+- Use angle brackets for placeholders: <placeholder-name>
+- Use descriptive names: <branch-name>, <file-path>, <username>, <port-number>
+- Examples: 
+  * git checkout -b <branch-name>
+  * docker run -p <host-port>:<container-port> <image-name>
+  * ssh <username>@<hostname>
+  * find <directory> -name "<pattern>"
 
 RESPONSE FORMAT:
 Provide your response in this exact format:
@@ -287,7 +240,7 @@ EXPLANATION:
 [Clear explanation of what this command accomplishes]
 
 COMMAND:
-[The suggested command to run]
+[The suggested command with placeholders like <branch-name>, <file-path>, etc.]
 
 ALTERNATIVES:
 [Other ways to accomplish the same task, if applicable]
@@ -385,7 +338,59 @@ Be educational and thorough in your explanation."""
                     command = command.replace('```', '')
             result['command'] = command.strip()
 
+            # Handle placeholder replacement for commands
+            if action_type in ['suggest', 'fix']:
+                result['command'] = self._handle_command_placeholders(
+                    result['command'])
+
         return result
+
+    def _handle_command_placeholders(self, command: str) -> str:
+        """Handle placeholder replacement in commands."""
+        import re
+
+        # Find all placeholders in the format <placeholder-name>
+        placeholder_pattern = r'<([^>]+)>'
+        placeholders = re.findall(placeholder_pattern, command)
+
+        if not placeholders:
+            return command
+
+        self.logger.info(
+            f"\n📝 The command contains placeholders that need to be replaced:")
+        self.logger.info(f"   {command}")
+        self.logger.info("")
+
+        replaced_command = command
+        replacements = {}
+
+        for placeholder in placeholders:
+            # Skip if we already got a replacement for this placeholder
+            if placeholder in replacements:
+                continue
+
+            # Prompt user for replacement
+            while True:
+                try:
+                    user_input = input(
+                        f"🔧 Replace <{placeholder}> with: ").strip()
+                    if user_input:
+                        replacements[placeholder] = user_input
+                        break
+                    else:
+                        self.logger.warning(
+                            "Please provide a value for the placeholder.")
+                except (EOFError, KeyboardInterrupt):
+                    self.logger.info("\nPlaceholder replacement cancelled.")
+                    return command  # Return original command if cancelled
+
+        # Replace all placeholders with user input
+        for placeholder, replacement in replacements.items():
+            replaced_command = replaced_command.replace(
+                f'<{placeholder}>', replacement)
+
+        self.logger.info(f"\n✅ Final command: {replaced_command}")
+        return replaced_command
 
     def validate_command_safety(self, command: str) -> tuple[bool, str]:
         """Validate if a command is safe to execute."""

@@ -335,44 +335,101 @@ def handle_smart_mode(processor, logger, auto_execute):
             "No recent errors detected. Use --help for usage information.")
 
 
-def should_execute_command():
+def should_execute_command(command=None):
     """Ask user if they want to execute the suggested command."""
     try:
+        # Add warning for interactive commands
+        if command and is_interactive_command(command):
+            print("\n⚠️  WARNING: This appears to be an interactive command!")
+            print(
+                "   This will start an interactive session that you'll need to exit manually.")
+            print("   Examples: SSH sessions, text editors, database clients, etc.")
+            print("   Press Ctrl+C or follow the program's exit instructions to return.")
+
         response = input("\nExecute this command? [y/N]: ").strip().lower()
         return response in ['y', 'yes']
     except (EOFError, KeyboardInterrupt):
         return False
 
 
+def is_interactive_command(command):
+    """Check if a command is likely to be interactive."""
+    interactive_commands = [
+        'ssh', 'scp', 'sftp', 'ftp', 'telnet', 'mysql', 'psql',
+        'mongo', 'redis-cli', 'docker exec -it', 'kubectl exec -it',
+        'sudo', 'su', 'passwd', 'nano', 'vim', 'emacs', 'less',
+        'more', 'man', 'top', 'htop', 'watch', 'tail -f'
+    ]
+
+    command_lower = command.lower().strip()
+
+    # Check for exact matches and common patterns
+    for interactive_cmd in interactive_commands:
+        if command_lower.startswith(interactive_cmd + ' ') or command_lower == interactive_cmd:
+            return True
+
+    # Check for interactive flags
+    interactive_flags = ['-it', '--interactive', '--tty']
+    for flag in interactive_flags:
+        if flag in command_lower:
+            return True
+
+    return False
+
+
 def execute_command(command, logger):
-    """Execute the suggested command."""
+    """Execute the suggested command with proper interactive handling."""
     import subprocess
     import shlex
+    import sys
 
     try:
         logger.info(f"Executing: {command}")
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
 
-        if result.stdout:
-            print(result.stdout)
+        # Check if this is an interactive command
+        if is_interactive_command(command):
+            logger.info(
+                "🔄 Detected interactive command - connecting directly to terminal...")
 
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
+            # For interactive commands, don't capture output and allow direct terminal access
+            result = subprocess.run(
+                command,
+                shell=True,
+                # No capture_output=True for interactive commands
+                timeout=None  # No timeout for interactive commands
+            )
 
-        if result.returncode != 0:
-            logger.warning(
-                f"Command failed with exit code {result.returncode}")
+            if result.returncode == 0:
+                logger.info("✅ Interactive command completed successfully!")
+            else:
+                logger.warning(
+                    f"⚠️ Interactive command exited with code {result.returncode}")
         else:
-            logger.info("Command executed successfully!")
+            # For non-interactive commands, capture output as before
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.stdout:
+                print(result.stdout)
+
+            if result.stderr:
+                print(result.stderr, file=sys.stderr)
+
+            if result.returncode != 0:
+                logger.warning(
+                    f"Command failed with exit code {result.returncode}")
+            else:
+                logger.info("Command executed successfully!")
 
     except subprocess.TimeoutExpired:
         logger.error("Command timed out after 30 seconds")
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Command execution interrupted by user")
     except Exception as e:
         logger.error(f"Failed to execute command: {e}")
 
